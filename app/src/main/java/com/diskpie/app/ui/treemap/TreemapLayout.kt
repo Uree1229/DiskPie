@@ -10,6 +10,7 @@ data class TreemapEntry(
     val sizeBytes: Long,
     val category: FileCategory,
     val isDirectory: Boolean,
+    val paletteIndex: Int? = null,
 )
 
 data class RectBounds(

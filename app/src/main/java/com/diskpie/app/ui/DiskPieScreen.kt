@@ -1,6 +1,7 @@
 package com.diskpie.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -47,6 +48,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.diskpie.app.DiskPieUiState
 import com.diskpie.app.SelectedFolder
+import com.diskpie.app.model.AppStorageSummary
+import com.diskpie.app.model.AppStorageUsage
 import com.diskpie.app.model.CategoryUsage
 import com.diskpie.app.model.DeviceStorage
 import com.diskpie.app.model.FileCategory
@@ -63,6 +66,7 @@ import com.diskpie.app.ui.theme.SoftInk
 import com.diskpie.app.ui.theme.Warning
 import com.diskpie.app.ui.treemap.StorageTreemap
 import com.diskpie.app.ui.treemap.TreemapEntry
+import com.diskpie.app.ui.treemap.appPaletteColor
 import com.diskpie.app.ui.treemap.categoryColor
 import com.diskpie.app.util.ByteFormatter
 import java.util.Locale
@@ -72,6 +76,8 @@ fun DiskPieScreen(
     uiState: DiskPieUiState,
     onChooseFolder: () -> Unit,
     onRequestAllFilesAccess: () -> Unit,
+    onRequestUsageAccess: () -> Unit,
+    onRefreshAppStorage: () -> Unit,
     onToggleFolder: (String, Boolean) -> Unit,
     onSelectAllFolders: () -> Unit,
     onDeselectAllFolders: () -> Unit,
@@ -86,6 +92,7 @@ fun DiskPieScreen(
     var searchQuery by remember(uiState.result) { mutableStateOf("") }
     var filePendingDeletion by remember { mutableStateOf<StorageNode?>(null) }
     var showAllFilesDisclosure by remember { mutableStateOf(false) }
+    var showUsageAccessDisclosure by remember { mutableStateOf(false) }
     val displayedFiles: List<StorageNode> = remember(uiState.result, searchQuery) {
         val result = uiState.result ?: return@remember emptyList()
         if (searchQuery.isBlank()) {
@@ -132,6 +139,25 @@ fun DiskPieScreen(
                         },
                     )
                 }
+            }
+
+            item {
+                AppStorageSection(
+                    deviceStorage = uiState.deviceStorage,
+                    scannedBytes = uiState.result?.totalBytes,
+                    hasAccess = uiState.hasUsageStatsAccess,
+                    isLoading = uiState.isLoadingAppStorage,
+                    summary = uiState.appStorage,
+                    errorMessage = uiState.appStorageError,
+                    onRequestAccess = {
+                        if (uiState.hasUsageStatsAccess) {
+                            onRequestUsageAccess()
+                        } else {
+                            showUsageAccessDisclosure = true
+                        }
+                    },
+                    onRefresh = onRefreshAppStorage,
+                )
             }
 
             uiState.errorMessage?.let { message ->
@@ -239,6 +265,17 @@ fun DiskPieScreen(
             },
         )
     }
+
+
+    if (showUsageAccessDisclosure) {
+        UsageAccessDisclosureDialog(
+            onDismiss = { showUsageAccessDisclosure = false },
+            onAgree = {
+                showUsageAccessDisclosure = false
+                onRequestUsageAccess()
+            },
+        )
+    }
 }
 
 @Composable
@@ -297,7 +334,7 @@ private fun DeviceStorageCard(storage: DeviceStorage) {
             }
             Spacer(Modifier.width(20.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                Text("기기 저장공간", color = Muted, fontSize = 13.sp)
+                Text("현재 사용 중인 공간", color = Muted, fontSize = 13.sp)
                 Text(
                     ByteFormatter.format(storage.usedBytes),
                     color = Cream,
@@ -366,6 +403,354 @@ private fun AllFilesAccessDisclosureDialog(
         text = {
             Text(
                 "DiskPie가 저장공간 사용량을 계산하고 파일 열기·삭제 기능을 제공하기 위해 공유 저장공간의 파일 이름, 크기와 폴더 구조를 기기 안에서 읽습니다. 분석 정보는 외부로 전송하지 않습니다. 동의 후 Android 시스템 설정에서도 이 앱의 ‘모든 파일 접근’을 허용해 주세요. 다른 앱의 보호된 Android/data 영역은 허용 후에도 접근할 수 없습니다.",
+            )
+        },
+        confirmButton = {
+            Button(onClick = onAgree) { Text("동의하고 설정 열기") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("취소") }
+        },
+    )
+}
+
+@Composable
+private fun AppStorageSection(
+    deviceStorage: DeviceStorage?,
+    scannedBytes: Long?,
+    hasAccess: Boolean,
+    isLoading: Boolean,
+    summary: AppStorageSummary?,
+    errorMessage: String?,
+    onRequestAccess: () -> Unit,
+    onRefresh: () -> Unit,
+) {
+    var selectedPackage by remember(summary) {
+        mutableStateOf(summary?.apps?.firstOrNull()?.packageName)
+    }
+    val selectedApp = summary?.apps?.firstOrNull { it.packageName == selectedPackage }
+
+    DashboardCard(containerColor = if (hasAccess) RaisedInk else SoftInk) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.Top) {
+                SectionTitle(
+                    title = "앱별 저장공간",
+                    subtitle = when {
+                        !hasAccess -> "별도 사용정보 접근 동의 필요"
+                        isLoading -> "설치 앱 용량을 계산하는 중"
+                        summary != null -> {
+                            "${formatCount(summary.apps.size)}개 앱 · ${formatElapsed(summary.elapsedMillis)}"
+                        }
+                        else -> "권한 허용됨"
+                    },
+                )
+                Spacer(Modifier.weight(1f))
+                if (hasAccess) {
+                    TextButton(onClick = onRefresh, enabled = !isLoading) { Text("새로고침") }
+                }
+            }
+
+            Text(
+                "상단 기기 사용량에는 공유 파일뿐 아니라 앱 코드·비공개 데이터·캐시와 Android 시스템 영역도 포함됩니다.",
+                color = Muted,
+                fontSize = 13.sp,
+                lineHeight = 19.sp,
+            )
+
+            deviceStorage?.let { storage ->
+                CoverageRow(
+                    label = "기기 전체 사용",
+                    bytes = storage.usedBytes,
+                    denominator = storage.usedBytes,
+                    color = Cream,
+                )
+                CoverageRow(
+                    label = "직접 읽은 파일",
+                    bytes = scannedBytes,
+                    denominator = storage.usedBytes,
+                    color = Leaf,
+                    pendingLabel = "폴더 분석 전",
+                )
+                CoverageRow(
+                    label = "앱별 Android 통계",
+                    bytes = summary?.totalBytes,
+                    denominator = storage.usedBytes,
+                    color = appPaletteColor(0),
+                    pendingLabel = when {
+                        !hasAccess -> "권한 필요"
+                        isLoading -> "계산 중"
+                        else -> "측정 전"
+                    },
+                )
+                Text(
+                    "두 분석에는 겹치는 항목이 있을 수 있어 합산하지 않습니다.",
+                    color = Warning,
+                    fontSize = 11.sp,
+                )
+            }
+
+            if (!hasAccess) {
+                Button(
+                    onClick = onRequestAccess,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Leaf,
+                        contentColor = Color(0xFF101311),
+                    ),
+                ) {
+                    Text("앱 용량 분석 동의 및 설정", fontWeight = FontWeight.Bold)
+                }
+            } else {
+                TextButton(onClick = onRequestAccess) { Text("사용정보 권한 설정 열기") }
+            }
+
+            errorMessage?.let { message ->
+                Text(message, color = Warning, fontSize = 12.sp)
+                if (hasAccess && !isLoading) {
+                    OutlinedButton(onClick = onRefresh) { Text("다시 시도") }
+                }
+            }
+
+            if (isLoading) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(28.dp),
+                        color = Leaf,
+                        trackColor = Outline,
+                        strokeWidth = 3.dp,
+                    )
+                    Spacer(Modifier.width(11.dp))
+                    Text("앱 수에 따라 몇 초 걸릴 수 있습니다.", color = Muted, fontSize = 12.sp)
+                }
+            }
+
+            summary?.takeIf { it.apps.isNotEmpty() }?.let { appSummary ->
+                AppStorageVisualization(
+                    summary = appSummary,
+                    selectedApp = selectedApp,
+                    onSelect = { selectedPackage = it.packageName },
+                )
+            }
+
+            if (summary != null && summary.apps.isEmpty() && !isLoading) {
+                Text("표시할 앱 저장공간 통계가 없습니다.", color = Muted, fontSize = 13.sp)
+            }
+
+            summary?.takeIf { it.inaccessibleAppCount > 0 }?.let { appSummary ->
+                Text(
+                    "측정할 수 없는 앱 ${formatCount(appSummary.inaccessibleAppCount)}개는 제외했습니다.",
+                    color = Muted,
+                    fontSize = 11.sp,
+                )
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Text(
+            "Android가 보고한 전체 사용량입니다. 아래의 직접 읽은 파일 용량과는 집계 범위가 다릅니다.",
+            color = Muted,
+            fontSize = 11.sp,
+            lineHeight = 16.sp,
+        )
+    }
+}
+
+@Composable
+private fun CoverageRow(
+    label: String,
+    bytes: Long?,
+    denominator: Long,
+    color: Color,
+    pendingLabel: String = "측정 전",
+) {
+    val fraction = if (bytes != null && denominator > 0L) {
+        (bytes.toDouble() / denominator.toDouble()).toFloat().coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(label, color = Cream, fontSize = 12.sp, modifier = Modifier.weight(1f))
+            Text(
+                text = bytes?.let {
+                    "${ByteFormatter.format(it)} · ${(fraction * 100).toInt()}%"
+                } ?: pendingLabel,
+                color = if (bytes == null) Muted else color,
+                fontSize = 11.sp,
+                fontWeight = if (bytes == null) FontWeight.Normal else FontWeight.SemiBold,
+            )
+        }
+        LinearProgressIndicator(
+            progress = { fraction },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(5.dp)
+                .clip(CircleShape),
+            color = color,
+            trackColor = Outline,
+        )
+    }
+}
+
+@Composable
+private fun AppStorageVisualization(
+    summary: AppStorageSummary,
+    selectedApp: AppStorageUsage?,
+    onSelect: (AppStorageUsage) -> Unit,
+) {
+    val entries = remember(summary) { summary.toAppTreemapEntries() }
+    val topApps = remember(summary) { summary.apps.take(APP_LIST_LIMIT) }
+    val largestBytes = topApps.firstOrNull()?.totalBytes ?: 0L
+
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(
+            "앱 용량 지도 · ${ByteFormatter.format(summary.totalBytes)}",
+            color = Cream,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+        )
+        StorageTreemap(
+            entries = entries,
+            selectedId = selectedApp?.packageName,
+            onSelect = { entry ->
+                summary.apps.firstOrNull { it.packageName == entry.id }?.let(onSelect)
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(Color(0xFF0B0D0C)),
+        )
+        Text("사각형의 넓이가 앱의 코드·데이터·캐시 합계에 비례합니다.", color = Muted, fontSize = 11.sp)
+
+        selectedApp?.let { app ->
+            AppStorageDetail(
+                app = app,
+                color = appPaletteColor(summary.apps.indexOf(app)),
+            )
+        }
+
+        Text("용량이 큰 앱", color = Cream, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        topApps.forEachIndexed { index, app ->
+            val fraction = if (largestBytes > 0L) {
+                (app.totalBytes.toDouble() / largestBytes.toDouble()).toFloat().coerceIn(0f, 1f)
+            } else {
+                0f
+            }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable { onSelect(app) }
+                    .padding(vertical = 5.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(appPaletteColor(index)),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        app.label,
+                        color = Cream,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(ByteFormatter.format(app.totalBytes), color = Muted, fontSize = 11.sp)
+                }
+                LinearProgressIndicator(
+                    progress = { fraction },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .clip(CircleShape),
+                    color = appPaletteColor(index),
+                    trackColor = Outline,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppStorageDetail(app: AppStorageUsage, color: Color) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(SoftInk)
+            .padding(13.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(10.dp).clip(CircleShape).background(color))
+            Spacer(Modifier.width(9.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    app.label,
+                    color = Cream,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    app.packageName,
+                    color = Muted,
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(ByteFormatter.format(app.totalBytes), color = Cream, fontWeight = FontWeight.Bold)
+                Text(if (app.isSystemApp) "시스템 앱" else "설치 앱", color = Muted, fontSize = 10.sp)
+            }
+        }
+        AppStorageBreakdownRow("앱 코드", app.codeBytes, app.totalBytes, appPaletteColor(0))
+        AppStorageBreakdownRow("데이터", app.dataBytes, app.totalBytes, Leaf)
+        AppStorageBreakdownRow("캐시", app.cacheBytes, app.totalBytes, Warning)
+    }
+}
+
+@Composable
+private fun AppStorageBreakdownRow(
+    label: String,
+    bytes: Long,
+    totalBytes: Long,
+    color: Color,
+) {
+    val fraction = if (totalBytes > 0L) {
+        (bytes.toDouble() / totalBytes.toDouble()).toFloat().coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row {
+            Text(label, color = Muted, fontSize = 11.sp, modifier = Modifier.weight(1f))
+            Text(ByteFormatter.format(bytes), color = Muted, fontSize = 11.sp)
+        }
+        LinearProgressIndicator(
+            progress = { fraction },
+            modifier = Modifier.fillMaxWidth().height(4.dp).clip(CircleShape),
+            color = color,
+            trackColor = Outline,
+        )
+    }
+}
+
+@Composable
+private fun UsageAccessDisclosureDialog(
+    onDismiss: () -> Unit,
+    onAgree: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("앱별 용량 분석 동의") },
+        text = {
+            Text(
+                "DiskPie는 설치된 앱의 이름과 패키지 식별자, 앱 코드·데이터·캐시의 용량 통계를 기기 안에서 읽습니다. 파일 내용과 앱 사용기록은 읽지 않으며 분석 정보는 외부로 전송하지 않습니다. 동의 후 Android 시스템 설정에서 DiskPie의 ‘사용정보 접근 허용’을 켜 주세요.",
             )
         },
         confirmButton = {
@@ -978,6 +1363,33 @@ private fun StorageNode.toTreemapEntries(): List<TreemapEntry> {
     return entries
 }
 
+private fun AppStorageSummary.toAppTreemapEntries(): List<TreemapEntry> {
+    val visibleApps = apps.take(MAX_TREEMAP_TILES)
+    val entries = visibleApps.mapIndexed { index, app ->
+        TreemapEntry(
+            id = app.packageName,
+            label = app.label,
+            sizeBytes = app.totalBytes,
+            category = FileCategory.APP,
+            isDirectory = false,
+            paletteIndex = index,
+        )
+    }.toMutableList()
+
+    if (apps.size > visibleApps.size) {
+        entries += TreemapEntry(
+            id = "__other_apps__",
+            label = "기타 ${apps.size - visibleApps.size}개",
+            sizeBytes = apps.drop(visibleApps.size).fold(0L) { total, app ->
+                safeAdd(total, app.totalBytes)
+            },
+            category = FileCategory.OTHER,
+            isDirectory = false,
+        )
+    }
+    return entries
+}
+
 private fun safeAdd(left: Long, right: Long): Long =
     if (Long.MAX_VALUE - left < right) Long.MAX_VALUE else left + right
 
@@ -1000,4 +1412,5 @@ private fun formatElapsed(milliseconds: Long): String = when {
 }
 
 private const val MAX_TREEMAP_TILES = 35
+private const val APP_LIST_LIMIT = 10
 private const val FILE_SEARCH_LIMIT = 100

@@ -62,7 +62,7 @@ fun StorageTreemap(
                     .offset(x = bounds.left.dp, y = bounds.top.dp)
                     .size(width = tileWidth, height = tileHeight)
                     .clip(RoundedCornerShape(5.dp))
-                    .background(categoryColor(tile.entry.category))
+                    .background(treemapEntryColor(tile.entry))
                     .then(
                         if (selected) {
                             Modifier.border(2.dp, Cream, RoundedCornerShape(5.dp))
@@ -105,3 +105,19 @@ fun categoryColor(category: FileCategory): Color = when (category) {
     FileCategory.APP -> Color(0xFFFFDB65)
     FileCategory.OTHER -> Color(0xFF89958B)
 }
+
+fun appPaletteColor(index: Int): Color = APP_PALETTE[Math.floorMod(index, APP_PALETTE.size)]
+
+private fun treemapEntryColor(entry: TreemapEntry): Color =
+    entry.paletteIndex?.let(::appPaletteColor) ?: categoryColor(entry.category)
+
+private val APP_PALETTE = listOf(
+    Color(0xFFFFDB65),
+    Color(0xFF9FE870),
+    Color(0xFF69D2E7),
+    Color(0xFFA68BE8),
+    Color(0xFFFF9C73),
+    Color(0xFFFF83B5),
+    Color(0xFF78C6A3),
+    Color(0xFFC7B8FF),
+)

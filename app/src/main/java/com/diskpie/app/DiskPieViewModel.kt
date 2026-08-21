@@ -14,9 +14,11 @@ import androidx.core.net.toUri
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.diskpie.app.data.AppStorageReader
 import com.diskpie.app.data.DeviceStorageReader
 import com.diskpie.app.data.StorageFileManager
 import com.diskpie.app.data.StorageScanner
+import com.diskpie.app.model.AppStorageSummary
 import com.diskpie.app.model.DeviceStorage
 import com.diskpie.app.model.ScanProgress
 import com.diskpie.app.model.ScanResult
@@ -43,7 +45,11 @@ data class DiskPieUiState(
     val selectedFolders: List<SelectedFolder> = emptyList(),
     val supportsAllFilesAccess: Boolean = false,
     val hasAllFilesAccess: Boolean = false,
+    val hasUsageStatsAccess: Boolean = false,
     val deviceStorage: DeviceStorage? = null,
+    val appStorage: AppStorageSummary? = null,
+    val isLoadingAppStorage: Boolean = false,
+    val appStorageError: String? = null,
     val isScanning: Boolean = false,
     val progress: ScanProgress = ScanProgress(),
     val result: ScanResult? = null,
@@ -56,8 +62,10 @@ data class DiskPieUiState(
 class DiskPieViewModel(application: Application) : AndroidViewModel(application) {
     private val scanner = StorageScanner(application)
     private val fileManager = StorageFileManager(application)
+    private val appStorageReader = AppStorageReader(application)
     private val preferences = application.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
     private val initialAllFilesAccess = isAllFilesAccessGranted()
+    private val initialUsageStatsAccess = appStorageReader.hasUsageStatsAccess()
     private val initialFolders = loadSavedFolders().let { savedFolders ->
         val withoutStaleRoots = if (initialAllFilesAccess) {
             savedFolders
@@ -81,16 +89,19 @@ class DiskPieViewModel(application: Application) : AndroidViewModel(application)
             selectedFolders = initialFolders,
             supportsAllFilesAccess = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R,
             hasAllFilesAccess = initialAllFilesAccess,
+            hasUsageStatsAccess = initialUsageStatsAccess,
             canDeleteFiles = canDeleteFromAllSelectedFolders(initialFolders),
         ),
     )
     val uiState: StateFlow<DiskPieUiState> = _uiState.asStateFlow()
 
     private var scanJob: Job? = null
+    private var appStorageJob: Job? = null
 
     init {
         persistFolders(initialFolders)
         refreshDeviceStorage()
+        if (initialUsageStatsAccess) refreshAppStorage()
         activeFolderUris(initialFolders).takeIf(List<String>::isNotEmpty)?.let(::startScan)
     }
 
@@ -279,6 +290,90 @@ class DiskPieViewModel(application: Application) : AndroidViewModel(application)
     fun refreshDeviceStorage() {
         _uiState.update {
             it.copy(deviceStorage = runCatching(DeviceStorageReader::readInternalStorage).getOrNull())
+        }
+    }
+
+    fun refreshAppStorageAccess() {
+        val accessGranted = appStorageReader.hasUsageStatsAccess()
+        val currentState = _uiState.value
+        if (!accessGranted) {
+            appStorageJob?.cancel()
+            appStorageJob = null
+            if (
+                currentState.hasUsageStatsAccess ||
+                currentState.appStorage != null ||
+                currentState.isLoadingAppStorage
+            ) {
+                _uiState.update {
+                    it.copy(
+                        hasUsageStatsAccess = false,
+                        appStorage = null,
+                        isLoadingAppStorage = false,
+                        appStorageError = null,
+                    )
+                }
+            }
+            return
+        }
+
+        val shouldRefresh = !currentState.hasUsageStatsAccess ||
+            (currentState.appStorage == null && !currentState.isLoadingAppStorage)
+        _uiState.update {
+            it.copy(hasUsageStatsAccess = true, appStorageError = null)
+        }
+        if (shouldRefresh) refreshAppStorage()
+    }
+
+    fun refreshAppStorage() {
+        if (!appStorageReader.hasUsageStatsAccess()) {
+            _uiState.update {
+                it.copy(
+                    hasUsageStatsAccess = false,
+                    appStorage = null,
+                    isLoadingAppStorage = false,
+                    appStorageError = "앱별 용량을 보려면 사용정보 접근을 허용해 주세요.",
+                )
+            }
+            return
+        }
+
+        appStorageJob?.cancel()
+        _uiState.update {
+            it.copy(
+                hasUsageStatsAccess = true,
+                isLoadingAppStorage = true,
+                appStorageError = null,
+            )
+        }
+        appStorageJob = viewModelScope.launch {
+            try {
+                val summary = appStorageReader.read()
+                _uiState.update {
+                    it.copy(
+                        appStorage = summary,
+                        isLoadingAppStorage = false,
+                        appStorageError = null,
+                    )
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: SecurityException) {
+                _uiState.update {
+                    it.copy(
+                        hasUsageStatsAccess = false,
+                        appStorage = null,
+                        isLoadingAppStorage = false,
+                        appStorageError = "앱 사용정보 접근 권한이 해제되었습니다.",
+                    )
+                }
+            } catch (error: Exception) {
+                _uiState.update {
+                    it.copy(
+                        isLoadingAppStorage = false,
+                        appStorageError = error.message ?: "앱별 저장공간을 불러오지 못했습니다.",
+                    )
+                }
+            }
         }
     }
 

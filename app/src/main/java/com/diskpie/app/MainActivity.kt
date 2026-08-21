@@ -40,6 +40,8 @@ class MainActivity : ComponentActivity() {
                     uiState = uiState,
                     onChooseFolder = { folderPicker.launch(null) },
                     onRequestAllFilesAccess = ::openAllFilesAccessSettings,
+                    onRequestUsageAccess = ::openUsageAccessSettings,
+                    onRefreshAppStorage = viewModel::refreshAppStorage,
                     onToggleFolder = viewModel::setFolderSelected,
                     onSelectAllFolders = viewModel::selectAllFolders,
                     onDeselectAllFolders = viewModel::deselectAllFolders,
@@ -59,6 +61,7 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         viewModel.refreshAllFilesAccess()
         viewModel.refreshDeviceStorage()
+        viewModel.refreshAppStorageAccess()
     }
 
     private fun openFile(file: StorageNode) {
@@ -118,6 +121,14 @@ class MainActivity : ComponentActivity() {
             } catch (_: ActivityNotFoundException) {
                 Toast.makeText(this, "모든 파일 접근 설정을 열 수 없습니다.", Toast.LENGTH_LONG).show()
             }
+        }
+    }
+
+    private fun openUsageAccessSettings() {
+        try {
+            startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(this, "사용정보 접근 설정을 열 수 없습니다.", Toast.LENGTH_LONG).show()
         }
     }
 }

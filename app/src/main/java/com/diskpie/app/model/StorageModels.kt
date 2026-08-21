@@ -46,3 +46,46 @@ data class DeviceStorage(
         0f
     }
 }
+
+data class AppStorageUsage(
+    val packageName: String,
+    val label: String,
+    val codeBytes: Long,
+    val dataBytes: Long,
+    val cacheBytes: Long,
+    val isSystemApp: Boolean,
+) {
+    val totalBytes: Long = safeAdd(safeAdd(codeBytes, dataBytes), cacheBytes)
+
+    companion object {
+        fun fromPlatformStats(
+            packageName: String,
+            label: String,
+            codeBytes: Long,
+            dataBytesIncludingCache: Long,
+            cacheBytes: Long,
+            isSystemApp: Boolean,
+        ): AppStorageUsage {
+            val normalizedData = dataBytesIncludingCache.coerceAtLeast(0L)
+            val normalizedCache = cacheBytes.coerceIn(0L, normalizedData)
+            return AppStorageUsage(
+                packageName = packageName,
+                label = label,
+                codeBytes = codeBytes.coerceAtLeast(0L),
+                dataBytes = normalizedData - normalizedCache,
+                cacheBytes = normalizedCache,
+                isSystemApp = isSystemApp,
+            )
+        }
+    }
+}
+
+data class AppStorageSummary(
+    val apps: List<AppStorageUsage>,
+    val totalBytes: Long,
+    val inaccessibleAppCount: Int,
+    val elapsedMillis: Long,
+)
+
+private fun safeAdd(left: Long, right: Long): Long =
+    if (right > 0L && Long.MAX_VALUE - left < right) Long.MAX_VALUE else left + right
