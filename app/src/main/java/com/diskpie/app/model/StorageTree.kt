@@ -1,6 +1,29 @@
 package com.diskpie.app.model
 
 object StorageTree {
+    fun combineRoots(roots: List<StorageNode>): StorageNode {
+        require(roots.isNotEmpty()) { "At least one storage root is required." }
+        if (roots.size == 1) return roots.single()
+
+        val totalBytes = roots.fold(0L) { total, root -> saturatedAdd(total, root.sizeBytes) }
+        val dominantCategory = roots
+            .groupingBy(StorageNode::category)
+            .fold(0L) { total, root -> saturatedAdd(total, root.sizeBytes) }
+            .maxByOrNull { it.value }
+            ?.key
+            ?: FileCategory.OTHER
+        return StorageNode(
+            uri = COMBINED_ROOT_URI,
+            name = "선택한 폴더 ${roots.size}개",
+            sizeBytes = totalBytes,
+            isDirectory = true,
+            mimeType = null,
+            category = dominantCategory,
+            relativePath = "선택한 폴더",
+            children = roots.sortedByDescending(StorageNode::sizeBytes),
+        )
+    }
+
     fun containsFile(root: StorageNode, uri: String): Boolean {
         val pending = ArrayDeque<StorageNode>()
         pending.addLast(root)
@@ -34,4 +57,9 @@ object StorageTree {
         }
         return matches.sortedByDescending(StorageNode::sizeBytes)
     }
+
+    private fun saturatedAdd(left: Long, right: Long): Long =
+        if (Long.MAX_VALUE - left < right) Long.MAX_VALUE else left + right
+
+    private const val COMBINED_ROOT_URI = "diskpie://selected-folders"
 }

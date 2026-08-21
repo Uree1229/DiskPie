@@ -34,6 +34,25 @@ class StorageTreeTest {
         assertTrue(StorageTree.searchFiles(manyRoot, "item", limit = 0).isEmpty())
     }
 
+    @Test
+    fun `combineRoots creates one searchable result without losing folders`() {
+        val secondFile = file("content://second/file", "archive.zip", 700)
+        val secondRoot = directory("content://second", "second", listOf(secondFile))
+
+        val combined = StorageTree.combineRoots(listOf(root, secondRoot))
+
+        assertEquals("선택한 폴더 2개", combined.name)
+        assertEquals(1_020L, combined.sizeBytes)
+        assertEquals(listOf(secondRoot, root), combined.children)
+        assertTrue(StorageTree.containsFile(combined, photo.uri))
+        assertEquals(listOf(secondFile), StorageTree.searchFiles(combined, "archive"))
+    }
+
+    @Test
+    fun `combineRoots keeps a single root unchanged`() {
+        assertEquals(root, StorageTree.combineRoots(listOf(root)))
+    }
+
     private fun file(uri: String, name: String, size: Long) = StorageNode(
         uri = uri,
         name = name,

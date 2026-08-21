@@ -23,6 +23,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -45,6 +46,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.diskpie.app.DiskPieUiState
+import com.diskpie.app.SelectedFolder
 import com.diskpie.app.model.CategoryUsage
 import com.diskpie.app.model.DeviceStorage
 import com.diskpie.app.model.FileCategory
@@ -69,6 +71,11 @@ import java.util.Locale
 fun DiskPieScreen(
     uiState: DiskPieUiState,
     onChooseFolder: () -> Unit,
+    onRequestAllFilesAccess: () -> Unit,
+    onToggleFolder: (String, Boolean) -> Unit,
+    onSelectAllFolders: () -> Unit,
+    onDeselectAllFolders: () -> Unit,
+    onRemoveFolder: (String) -> Unit,
     onRescan: () -> Unit,
     onCancelScan: () -> Unit,
     onDismissError: () -> Unit,
@@ -78,6 +85,7 @@ fun DiskPieScreen(
 ) {
     var searchQuery by remember(uiState.result) { mutableStateOf("") }
     var filePendingDeletion by remember { mutableStateOf<StorageNode?>(null) }
+    var showAllFilesDisclosure by remember { mutableStateOf(false) }
     val displayedFiles: List<StorageNode> = remember(uiState.result, searchQuery) {
         val result = uiState.result ?: return@remember emptyList()
         if (searchQuery.isBlank()) {
@@ -87,6 +95,7 @@ fun DiskPieScreen(
         }
     }
     val deletionEnabled = uiState.canDeleteFiles && !uiState.isScanning && !uiState.isDeleting
+    val selectedFolderCount = uiState.selectedFolders.count(SelectedFolder::isSelected)
 
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -110,6 +119,21 @@ fun DiskPieScreen(
                 item { DeviceStorageCard(storage) }
             }
 
+            if (uiState.supportsAllFilesAccess) {
+                item {
+                    AllFilesAccessCard(
+                        hasAccess = uiState.hasAllFilesAccess,
+                        onRequestAccess = {
+                            if (uiState.hasAllFilesAccess) {
+                                onRequestAllFilesAccess()
+                            } else {
+                                showAllFilesDisclosure = true
+                            }
+                        },
+                    )
+                }
+            }
+
             uiState.errorMessage?.let { message ->
                 item { ErrorCard(message, onDismissError) }
             }
@@ -118,8 +142,22 @@ fun DiskPieScreen(
                 item { ActionMessageCard(message, onDismissActionMessage) }
             }
 
-            if (uiState.selectedTreeUri == null) {
+            if (uiState.selectedFolders.isEmpty()) {
                 item { EmptyState(onChooseFolder) }
+            } else {
+                item {
+                    FolderSelectionCard(
+                        folders = uiState.selectedFolders,
+                        onChooseFolder = onChooseFolder,
+                        onToggleFolder = onToggleFolder,
+                        onSelectAllFolders = onSelectAllFolders,
+                        onDeselectAllFolders = onDeselectAllFolders,
+                        onRemoveFolder = onRemoveFolder,
+                    )
+                }
+                if (selectedFolderCount == 0) {
+                    item { NoFolderSelectedCard() }
+                }
             }
 
             if (uiState.isScanning) {
@@ -188,6 +226,16 @@ fun DiskPieScreen(
             onConfirm = {
                 filePendingDeletion = null
                 onDeleteFile(file)
+            },
+        )
+    }
+
+    if (showAllFilesDisclosure) {
+        AllFilesAccessDisclosureDialog(
+            onDismiss = { showAllFilesDisclosure = false },
+            onAgree = {
+                showAllFilesDisclosure = false
+                onRequestAllFilesAccess()
             },
         )
     }
@@ -267,12 +315,75 @@ private fun DeviceStorageCard(storage: DeviceStorage) {
 }
 
 @Composable
+private fun AllFilesAccessCard(
+    hasAccess: Boolean,
+    onRequestAccess: () -> Unit,
+) {
+    DashboardCard(containerColor = if (hasAccess) Color(0xFF1D2A1C) else SoftInk) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            SectionTitle(
+                "전체 저장공간 탐색",
+                if (hasAccess) "허용됨" else "추가 동의 필요",
+            )
+            Text(
+                text = if (hasAccess) {
+                    "공유 저장공간과 연결된 SD·USB의 접근 가능한 폴더를 한 번에 분석합니다."
+                } else {
+                    "Android의 앱별 ‘모든 파일 접근’을 허용하면 폴더를 하나씩 고르지 않고 공유 저장공간 전체를 분석할 수 있습니다."
+                },
+                color = Muted,
+                fontSize = 13.sp,
+                lineHeight = 19.sp,
+            )
+            if (hasAccess) {
+                Text(
+                    "다른 앱의 Android/data 전용 영역은 운영체제 정책상 계속 제외됩니다.",
+                    color = Warning,
+                    fontSize = 12.sp,
+                )
+            }
+            Button(
+                onClick = onRequestAccess,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Leaf,
+                    contentColor = Color(0xFF101311),
+                ),
+            ) {
+                Text(if (hasAccess) "권한 설정 열기" else "전체 접근 동의 및 설정", fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AllFilesAccessDisclosureDialog(
+    onDismiss: () -> Unit,
+    onAgree: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("전체 파일 접근 동의") },
+        text = {
+            Text(
+                "DiskPie가 저장공간 사용량을 계산하고 파일 열기·삭제 기능을 제공하기 위해 공유 저장공간의 파일 이름, 크기와 폴더 구조를 기기 안에서 읽습니다. 분석 정보는 외부로 전송하지 않습니다. 동의 후 Android 시스템 설정에서도 이 앱의 ‘모든 파일 접근’을 허용해 주세요. 다른 앱의 보호된 Android/data 영역은 허용 후에도 접근할 수 없습니다.",
+            )
+        },
+        confirmButton = {
+            Button(onClick = onAgree) { Text("동의하고 설정 열기") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("취소") }
+        },
+    )
+}
+
+@Composable
 private fun EmptyState(onChooseFolder: () -> Unit) {
     DashboardCard(containerColor = SoftInk) {
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text("어디가 공간을 차지할까요?", color = Cream, fontSize = 21.sp, fontWeight = FontWeight.Bold)
             Text(
-                "분석할 폴더를 선택하면 하위 폴더와 파일을 읽기 전용으로 스캔합니다. 삭제하거나 변경하지 않습니다.",
+                "폴더를 목록에 여러 개 추가하면 선택한 모든 위치를 한 번에 분석합니다. 추가한 폴더는 개별 또는 전체 선택·해제할 수 있습니다.",
                 color = Muted,
                 fontSize = 14.sp,
                 lineHeight = 21.sp,
@@ -281,8 +392,99 @@ private fun EmptyState(onChooseFolder: () -> Unit) {
                 onClick = onChooseFolder,
                 colors = ButtonDefaults.buttonColors(containerColor = Leaf, contentColor = Color(0xFF101311)),
             ) {
-                Text("폴더 선택", fontWeight = FontWeight.Bold)
+                Text("첫 폴더 선택", fontWeight = FontWeight.Bold)
             }
+        }
+    }
+}
+
+@Composable
+private fun FolderSelectionCard(
+    folders: List<SelectedFolder>,
+    onChooseFolder: () -> Unit,
+    onToggleFolder: (String, Boolean) -> Unit,
+    onSelectAllFolders: () -> Unit,
+    onDeselectAllFolders: () -> Unit,
+    onRemoveFolder: (String) -> Unit,
+) {
+    val selectedCount = folders.count(SelectedFolder::isSelected)
+    val sharedStorageRoots = folders.filter(SelectedFolder::isSharedStorageRoot)
+    val allTargetFoldersSelected = if (sharedStorageRoots.isNotEmpty()) {
+        sharedStorageRoots.all(SelectedFolder::isSelected) &&
+            folders.filterNot(SelectedFolder::isSharedStorageRoot).none(SelectedFolder::isSelected)
+    } else {
+        folders.all(SelectedFolder::isSelected)
+    }
+    DashboardCard {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                SectionTitle("분석 폴더", "${selectedCount}/${folders.size}개 선택")
+                Spacer(Modifier.weight(1f))
+                OutlinedButton(onClick = onChooseFolder) { Text("폴더 추가") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(
+                    onClick = onSelectAllFolders,
+                    enabled = !allTargetFoldersSelected,
+                ) {
+                    Text(if (sharedStorageRoots.isNotEmpty()) "전체 저장공간 선택" else "전체 폴더 선택")
+                }
+                TextButton(
+                    onClick = onDeselectAllFolders,
+                    enabled = selectedCount > 0,
+                ) { Text("전체 폴더 해제") }
+            }
+            folders.forEach { folder ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(
+                        checked = folder.isSelected,
+                        onCheckedChange = { checked -> onToggleFolder(folder.uri, checked) },
+                    )
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = folder.name,
+                            color = Cream,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = when {
+                                folder.isSharedStorageRoot -> "전체 접근 · 읽기·삭제 가능"
+                                folder.canWrite -> "읽기·삭제 가능"
+                                else -> "읽기 전용"
+                            },
+                            color = if (folder.canWrite) Muted else Warning,
+                            fontSize = 11.sp,
+                        )
+                    }
+                    if (folder.isSharedStorageRoot) {
+                        Text("시스템", color = Muted, fontSize = 11.sp)
+                    } else {
+                        TextButton(onClick = { onRemoveFolder(folder.uri) }) { Text("제거") }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun NoFolderSelectedCard() {
+    DashboardCard(containerColor = SoftInk) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("분석할 폴더가 선택되지 않았습니다.", color = Cream, fontWeight = FontWeight.Bold)
+            Text(
+                "위 목록에서 폴더를 체크하거나 ‘전체 폴더 선택’을 눌러 주세요.",
+                color = Muted,
+                fontSize = 13.sp,
+            )
         }
     }
 }
@@ -409,7 +611,7 @@ private fun SelectionSummaryCard(
                 Metric("분석 시간", formatElapsed(result.elapsedMillis))
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onChooseFolder) { Text("다른 폴더") }
+                OutlinedButton(onClick = onChooseFolder) { Text("폴더 추가") }
                 Button(onClick = onRescan, enabled = !isScanning) { Text("다시 분석") }
             }
         }
@@ -591,12 +793,12 @@ private fun FileSearchSection(
             if (!canDeleteFiles) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = "삭제하려면 동일한 폴더를 다시 선택해 쓰기 권한을 허용하세요.",
+                        text = "삭제하려면 선택한 모든 폴더에 쓰기 권한이 필요합니다. 읽기 전용 폴더를 다시 선택해 주세요.",
                         color = Warning,
                         fontSize = 12.sp,
                         modifier = Modifier.weight(1f),
                     )
-                    TextButton(onClick = onChooseFolder) { Text("폴더 선택") }
+                    TextButton(onClick = onChooseFolder) { Text("다시 선택") }
                 }
             } else {
                 Text(
