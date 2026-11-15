@@ -2,6 +2,17 @@
 
 DiskPie는 Android 저장공간을 WinDirStat처럼 빠르게 훑어보는 모바일 앱입니다. 기기의 전체 사용량을 보여주고, 사용자가 선택한 폴더의 실제 파일 크기와 설치 앱별 저장공간 통계를 각각 트리맵과 순위로 분석하며 확인한 개별 파일을 삭제할 수 있습니다.
 
+## 화면 미리 보기
+
+v0.4.0의 실제 Compose UI에 예시 데이터를 넣어 렌더링한 화면입니다. 표시된 용량·앱 이름·파일명·분석 시간은 시연용이며, 실제 사용자 기기를 스캔한 결과가 아닙니다. 이미지를 누르면 크게 볼 수 있습니다.
+
+| 저장공간 요약 | 앱별 저장공간 | 파일 용량 지도 |
+| --- | --- | --- |
+| [![전체 사용량과 저장소 접근 안내](docs/images/storage-overview.png)](docs/images/storage-overview.png) | [![앱별 용량 트리맵과 코드·데이터·캐시 구성](docs/images/app-storage.png)](docs/images/app-storage.png) | [![폴더별 파일 크기를 보여주는 트리맵과 파일 유형](docs/images/file-treemap.png)](docs/images/file-treemap.png) |
+| 기기의 사용·여유 용량과 분석 범위 확인 | 설치 앱별 용량 지도와 세부 구성 확인 | 큰 폴더·파일과 유형별 사용량 탐색 |
+
+[이미지 제작 조건](docs/images/README.md)
+
 ## APK 다운로드
 
 **[GitHub Releases에서 최신 APK 다운로드](https://github.com/Uree1229/DiskPie/releases/latest)**
